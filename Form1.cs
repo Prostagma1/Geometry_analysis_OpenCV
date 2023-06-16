@@ -2,7 +2,9 @@
 using OpenCvSharp.Extensions;
 using System;
 using System.IO;
+using System.Runtime.Remoting.Contexts;
 using System.Threading;
+using System.Windows.Documents;
 using System.Windows.Forms;
 using Point = OpenCvSharp.Point;
 using Size = OpenCvSharp.Size;
@@ -11,7 +13,7 @@ namespace Lab5
 {
     public partial class Form1 : Form
     {
-        bool runVideo, drawTriangle;
+        bool runVideo, drawTriangle, contourFinding;
         VideoCapture capture;
         Mat matInput, matWorkZone;
         Thread cameraThread;
@@ -22,7 +24,16 @@ namespace Lab5
         Point2f[] pointWorkZone = new Point2f[4];
         Scalar scalarZone;
         Point[] pointsTriangle = new Point[3];
+        Point[] tolerancePointsOut = new Point[3];
+        Point[] tolerancePointsIn = new Point[3];
+
         int degreeRotate = 0;
+        double toleranceField = 1.5;
+
+        int countWhitePixelsAtTemplate = -1;
+        int countWhitePixelsAtVideo = -1;
+        double countWhitePixelsOutside = -1;
+        double forText = -1;
         public Form1()
         {
             InitializeComponent();
@@ -81,25 +92,114 @@ namespace Lab5
             {
                 matInput = radioButton1.Checked ? capture.RetrieveMat() : new Mat(pathToFile).Resize(sizeObject);
                 Mat matWithZone = matInput.Clone();
-
                 DrawLinesAtMat(ref matWithZone, pointWorkZone, scalarZone);
 
                 Cv2.WarpPerspective(matInput, matWorkZone, Cv2.GetPerspectiveTransform(pointWorkZone, sizeMatrixPoints), new Size(320, 240));
 
+                Mat matWorkZoneWithTemplate = matWorkZone.Clone();
+
                 if (drawTriangle)
                 {
-                    DrawTriangle(ref matWorkZone, pointsTriangle, degreeRotate);
+                    DrawTriangle(ref matWorkZoneWithTemplate, pointsTriangle, degreeRotate, true);
+                    DrawTriangle(ref matWorkZoneWithTemplate, tolerancePointsOut, degreeRotate);
+                    DrawTriangle(ref matWorkZoneWithTemplate, tolerancePointsIn, degreeRotate);
                 }
-
                 Invoke(new Action(() =>
                 {
                     listBox1_SelectedIndexChanged(null, null);
+                    label6.Text = $"{forText}";
                     pictureBox1.Image = BitmapConverter.ToBitmap(matWithZone);
-                    pictureBox2.Image = BitmapConverter.ToBitmap(matWorkZone);
+                    pictureBox2.Image = BitmapConverter.ToBitmap(matWorkZoneWithTemplate);
                     GC.Collect();
                     GC.WaitForPendingFinalizers();
                 }));
             }
+        }
+        double maxProc = -1;
+        volatile int id = 0;
+        Scalar sc = new Scalar(0, 0, 0);
+        volatile int j = 0;
+        const int round = 361;
+        private void FindContour(ref Mat mat)
+        {
+            Point[][] contours;
+            Mat temp1 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+            Mat temp2 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+            Mat inversMat2 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+            Mat mat1 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+            Mat mat3 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+            Mat mat2 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+            Mat outZoneMat = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+            Mat tryZoneMat = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+
+            maxProc = -1;
+            id = 0;
+            for (j = 0; j < round; j++)
+            {
+                Cv2.WaitKey(10);
+                temp1 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+                temp2 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+                inversMat2 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+                mat1 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+                mat3 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+                mat2 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+                outZoneMat = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+                tryZoneMat = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+
+                mat1 = FindWhitePiexel(mat, out contours);
+                DrawTriangle(ref outZoneMat, tolerancePointsOut, j);
+                mat2 = FindWhitePiexel(outZoneMat, out _);
+
+
+                DrawTriangle(ref tryZoneMat, pointsTriangle, j);
+                mat3 = FindWhitePiexel(tryZoneMat, out _);
+
+                Cv2.BitwiseAnd(mat1, mat2, temp1);
+
+                Cv2.BitwiseNot(mat2, inversMat2);
+                Cv2.BitwiseAnd(mat1, inversMat2, temp2);
+                /*
+                 * Бинарные изображения
+                 * mat1 - заготовки с камеры 
+                 * mat2 - максимальный размер шаблона (с допуском)
+                 * temp1 - mat1 & mat2 - сколько заготовки попало в шаблон
+                 * temp2 - сколько заготовки вышло за шаблон
+                 * mat3 - истинный размер шаблона (без допуска) 
+                */
+                countWhitePixelsAtVideo = temp1.CountNonZero();
+                countWhitePixelsOutside = temp2.CountNonZero();
+                countWhitePixelsAtTemplate = mat3.CountNonZero();
+                double proc = (countWhitePixelsAtVideo - countWhitePixelsOutside) / countWhitePixelsAtTemplate;
+
+                if (proc > maxProc)
+                {
+                    forText = countWhitePixelsOutside / countWhitePixelsAtTemplate;
+                    maxProc = proc;
+                    Invoke(new Action(() =>
+                    {
+                        id = j;
+                        pictureBox3.Image = BitmapConverter.ToBitmap(mat1);
+                        pictureBox4.Image = BitmapConverter.ToBitmap(mat2);
+                        pictureBox5.Image = BitmapConverter.ToBitmap(temp1);
+                        pictureBox6.Image = BitmapConverter.ToBitmap(temp2);
+                        pictureBox7.Image = BitmapConverter.ToBitmap(mat3);
+                    }));
+                }
+            }
+            trackBar3.Value = id;
+            trackBar3_Scroll(null, null);
+        }
+        private Mat FindWhitePiexel(Mat matForThis, out Point[][] contours)
+        {
+            Mat binaryMat = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+            matForThis.Blur(new Size(3, 3)).Canny(42, 185).FindContours(out contours, out _, RetrievalModes.External, ContourApproximationModes.ApproxSimple);
+
+            for (byte i = 0; i < contours.Length; i++)
+            {
+                binaryMat.FillConvexPoly(contours[i], Scalar.White);
+            }
+
+            return binaryMat;
         }
         private void CheckDegrees(ref Point[] points, Point center, int degree)
         {
@@ -118,16 +218,19 @@ namespace Lab5
 
             }
         }
-        private void DrawTriangle(ref Mat mat, Point[] points, int degree = 0)
+        private void DrawTriangle(ref Mat mat, Point[] points, int degree = 0, bool main = false)
         {
-            var scalar = new Scalar(255, 255, 255);
+            Scalar scalar;
+            if (main) scalar = new Scalar(0, 0, 255);
+            else scalar = new Scalar(255, 255, 255);
+
             var center = SearchCenterOfThreePoint(points);
 
             CheckDegrees(ref points, center, degree);
 
-            mat.Line(points[0], points[1], scalar);
-            mat.Line(points[1], points[2], scalar);
-            mat.Line(points[2], points[0], scalar);
+            mat.Line(points[0], points[1], scalar, lineType: LineTypes.AntiAlias);
+            mat.Line(points[1], points[2], scalar, lineType: LineTypes.AntiAlias);
+            mat.Line(points[2], points[0], scalar, lineType: LineTypes.AntiAlias);
             mat.Circle(center, 0, scalar);
         }
         private Point SearchCenterOfThreePoint(Point[] points)
@@ -206,7 +309,7 @@ namespace Lab5
                         listBox1.Items.Add(line);
                     }
                     listBox1.SelectedIndex = 0;
-                    listBox1_SelectedIndexChanged(null,null);
+                    listBox1_SelectedIndexChanged(null, null);
                 }
             }
             file.Dispose();
@@ -223,6 +326,31 @@ namespace Lab5
             pointsTriangle[1].Y = (int)(double.Parse(items[3]) * 8);
             pointsTriangle[2].X = (int)(double.Parse(items[4]) * 10.66666);
             pointsTriangle[2].Y = (int)(double.Parse(items[5]) * 8);
+
+            for (byte i = 0; i < 3; i++)
+            {
+                tolerancePointsIn[i].X = pointsTriangle[i].X;
+                tolerancePointsIn[i].Y = pointsTriangle[i].Y;
+
+                tolerancePointsOut[i].X = pointsTriangle[i].X;
+                tolerancePointsOut[i].Y = pointsTriangle[i].Y;
+            }
+
+            int addForX = (int)(toleranceField * 10.66666);
+            int addForY = (int)(toleranceField * 8);
+            tolerancePointsOut[0].X -= addForX;
+            tolerancePointsIn[0].X += addForX;
+            tolerancePointsOut[0].Y += addForY;
+            tolerancePointsIn[0].Y -= addForY;
+
+            tolerancePointsOut[1].Y -= addForY;
+            tolerancePointsIn[1].Y += addForY;
+
+            tolerancePointsOut[2].X += addForX;
+            tolerancePointsIn[2].X -= addForX;
+            tolerancePointsOut[2].Y += addForY;
+            tolerancePointsIn[2].Y -= addForY;
+
         }
 
         private void trackBar3_Scroll(object sender, EventArgs e)
@@ -230,6 +358,20 @@ namespace Lab5
             degreeRotate = trackBar3.Value;
         }
 
+        private void button5_Click(object sender, EventArgs e)
+        {
+            FindContour(ref matWorkZone);
+        }
+
+        private void textBox2_TextChanged(object sender, EventArgs e)
+        {
+
+        }
+
+        private void button4_Click(object sender, EventArgs e)
+        {
+            toleranceField = double.Parse(textBox2.Text);
+        }
         private void checkBox1_CheckedChanged(object sender, EventArgs e)
         {
             drawTriangle = checkBox1.Checked;

@@ -2,9 +2,7 @@
 using OpenCvSharp.Extensions;
 using System;
 using System.IO;
-using System.Runtime.Remoting.Contexts;
 using System.Threading;
-using System.Windows.Documents;
 using System.Windows.Forms;
 using Point = OpenCvSharp.Point;
 using Size = OpenCvSharp.Size;
@@ -13,7 +11,7 @@ namespace Lab5
 {
     public partial class Form1 : Form
     {
-        bool runVideo, drawTriangle, contourFinding;
+        bool runVideo, drawTriangle;
         VideoCapture capture;
         Mat matInput, matWorkZone;
         Thread cameraThread;
@@ -27,7 +25,7 @@ namespace Lab5
         Point[] tolerancePointsOut = new Point[3];
         Point[] tolerancePointsIn = new Point[3];
 
-        int degreeRotate = 0;
+        volatile int degreeRotate = 0;
         double toleranceField = 1.5;
 
         int countWhitePixelsAtTemplate = -1;
@@ -118,7 +116,7 @@ namespace Lab5
         double maxProc = -1;
         volatile int id = 0;
         Scalar sc = new Scalar(0, 0, 0);
-        volatile int j = 0;
+        volatile int gg = 0;
         const int round = 361;
         private void FindContour(ref Mat mat)
         {
@@ -131,33 +129,48 @@ namespace Lab5
             Mat mat2 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
             Mat outZoneMat = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
             Mat tryZoneMat = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+            Mat inZoneMat = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+            Mat mat4 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+            Mat mat5 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+            Mat temp3 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+
 
             maxProc = -1;
             id = 0;
-            for (j = 0; j < round; j++)
+            for (gg = 0; gg < round; gg++)
             {
-                Cv2.WaitKey(10);
                 temp1 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
                 temp2 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+                temp3 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
                 inversMat2 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
                 mat1 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
                 mat3 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
                 mat2 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
                 outZoneMat = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
                 tryZoneMat = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+                inZoneMat = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+                mat4 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
+                mat5 = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
 
-                mat1 = FindWhitePiexel(mat, out contours);
-                DrawTriangle(ref outZoneMat, tolerancePointsOut, j);
+                DrawTriangle(ref inZoneMat, tolerancePointsIn, gg);
+                mat4 = FindWhitePiexel(inZoneMat, out contours);
+
+                mat5 = FindWhitePiexel(mat, out _, true);
+
+                mat1 = FindWhitePiexel(mat, out _);
+                DrawTriangle(ref outZoneMat, tolerancePointsOut, gg);
                 mat2 = FindWhitePiexel(outZoneMat, out _);
 
+                Cv2.BitwiseAnd(mat4, mat5, temp3);
 
-                DrawTriangle(ref tryZoneMat, pointsTriangle, j);
+                DrawTriangle(ref tryZoneMat, pointsTriangle, gg);
                 mat3 = FindWhitePiexel(tryZoneMat, out _);
 
                 Cv2.BitwiseAnd(mat1, mat2, temp1);
 
                 Cv2.BitwiseNot(mat2, inversMat2);
                 Cv2.BitwiseAnd(mat1, inversMat2, temp2);
+                Cv2.BitwiseOr(temp2, temp3, temp2);
                 /*
                  * Бинарные изображения
                  * mat1 - заготовки с камеры 
@@ -173,31 +186,37 @@ namespace Lab5
 
                 if (proc > maxProc)
                 {
+
                     forText = countWhitePixelsOutside / countWhitePixelsAtTemplate;
                     maxProc = proc;
-                    Invoke(new Action(() =>
-                    {
-                        id = j;
-                        pictureBox3.Image = BitmapConverter.ToBitmap(mat1);
-                        pictureBox4.Image = BitmapConverter.ToBitmap(mat2);
-                        pictureBox5.Image = BitmapConverter.ToBitmap(temp1);
-                        pictureBox6.Image = BitmapConverter.ToBitmap(temp2);
-                        pictureBox7.Image = BitmapConverter.ToBitmap(mat3);
-                    }));
+
+                    trackBar3.Value = gg;
+                    degreeRotate = gg;
+                    pictureBox3.Image = BitmapConverter.ToBitmap(mat1);
+                    pictureBox4.Image = BitmapConverter.ToBitmap(mat2);
+                    pictureBox5.Image = BitmapConverter.ToBitmap(temp1);
+                    pictureBox6.Image = BitmapConverter.ToBitmap(temp2);
+                    pictureBox7.Image = BitmapConverter.ToBitmap(mat3);
                 }
             }
-            trackBar3.Value = id;
-            trackBar3_Scroll(null, null);
+
         }
-        private Mat FindWhitePiexel(Mat matForThis, out Point[][] contours)
+        private Mat FindWhitePiexel(Mat matForThis, out Point[][] contours, bool b = false)
         {
             Mat binaryMat = new Mat(new Size(320, 240), MatType.CV_8UC1, sc);
             matForThis.Blur(new Size(3, 3)).Canny(42, 185).FindContours(out contours, out _, RetrievalModes.External, ContourApproximationModes.ApproxSimple);
-
-            for (byte i = 0; i < contours.Length; i++)
+            if (b)
             {
-                binaryMat.FillConvexPoly(contours[i], Scalar.White);
+                binaryMat.DrawContours(contours, -1, Scalar.White, 3);
             }
+            else
+            {
+                for (byte i = 0; i < contours.Length; i++)
+                {
+                    binaryMat.FillConvexPoly(contours[i], Scalar.White);
+                }
+            }
+
 
             return binaryMat;
         }
@@ -236,12 +255,13 @@ namespace Lab5
         private Point SearchCenterOfThreePoint(Point[] points)
         {
             int x = 0, y = 0;
+            int countPoint = points.Length;
             foreach (var point in points)
             {
                 x += point.X;
                 y += point.Y;
             }
-            x /= 3; y /= 3;
+            x /= countPoint; y /= countPoint;
             return new Point(x, y);
         }
         private void button2_Click(object sender, EventArgs e)
